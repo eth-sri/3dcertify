@@ -1,0 +1,27 @@
+#include "transforms/brightness_transform.h"
+#include "transforms/composition.h"
+#include "transforms/composition_3d.h"
+#include "transforms/pixel_identity.h"
+#include "transforms/pixel_transform.h"
+#include "transforms/rotation.h"
+#include "transforms/rotation_1d.h"
+#include "transforms/rotation_2d.h"
+#include "transforms/rotation_3d.h"
+#include "transforms/rotation_x.h"
+#include "transforms/rotation_y.h"
+#include "transforms/rotation_z.h"
+#include "transforms/scale.h"
+#include "transforms/shear.h"
+#include "transforms/shear_x.h"
+#include "transforms/shear_y.h"
+#include "transforms/shear_z.h"
+#include "transforms/tapering_z.h"
+#include "transforms/tapering_z_inverse.h"
+#include "transforms/transformation.h"
+#include "transforms/translation.h"
+#include "transforms/translation_1d.h"
+#include "twisting_z.h"
+
+SpatialTransformation3D *getSpatialTransformation3D(string &s);
+SpatialTransformation *getSpatialTransformation(string &s);
+PixelTransformation *getPixelTransformation(string &s);

@@ -1,0 +1,649 @@
+diff --git a/auto_LiRPA/bound_general.py b/auto_LiRPA/bound_general.py
+index 3ee349e..3616c67 100644
+--- a/auto_LiRPA/bound_general.py
++++ b/auto_LiRPA/bound_general.py
+@@ -332,7 +332,12 @@ class BoundedModule(nn.Module):
+             inputs, ori_names = self._get_node_input(nodesOP, nodesIn, nodesOP[n])
+ 
+             try:
+-                if nodesOP[n].op in bound_op_map:
++                if nodesOP[n].op == 'onnx::Conv' and len(attr['strides']) == 1:
++                    op = BoundConv1d
++                elif nodesOP[n].op == 'onnx::AveragePool' and len(attr['strides']) == 1:
++                    print("BoundAveragePool1d")
++                    op = BoundAveragePool1d
++                elif nodesOP[n].op in bound_op_map:
+                     op = bound_op_map[nodesOP[n].op]
+                 elif nodesOP[n].op.startswith('onnx::'):
+                     op = eval('Bound{}'.format(nodesOP[n].op[6:]))
+@@ -597,7 +602,7 @@ class BoundedModule(nn.Module):
+ 
+         # check whether weights are perturbed and set nonlinear for the BoundMatMul operation
+         for n in self._modules.values():
+-            if isinstance(n, (BoundLinear, BoundConv, BoundBatchNormalization)):
++            if isinstance(n, (BoundLinear, BoundConv, BoundConv1d, BoundBatchNormalization)):
+                 n.nonlinear = False
+                 for l_name in n.input_name[1:]:
+                     node = self._modules[l_name]
+@@ -656,7 +661,7 @@ class BoundedModule(nn.Module):
+                             else:
+                                 # Here we avoid creating a big C matrix in the first linear layer
+                                 flag = False
+-                                if type(node) == BoundLinear or type(node) == BoundConv:
++                                if type(node) == BoundLinear or type(node) == BoundConv or type(node) == BoundConv1d:
+                                     for l_pre in node.input_name:
+                                         if type(self._modules[l_pre]) == BoundInput:
+                                             self._IBP_general(node)
+@@ -667,7 +672,7 @@ class BoundedModule(nn.Module):
+                                     # FIXME: C matrix shape incorrect for BoundParams.
+                                     if (isinstance(node, BoundLinear) or isinstance(node, BoundMatMul)) and int(os.environ.get('AUTOLIRPA_USE_FULL_C', 0)) == 0:
+                                         newC = eyeC([batch_size, dim, *node.default_shape[1:]], self.device)
+-                                    elif (isinstance(node, BoundConv) or isinstance(node, BoundBatchNormalization)) and node.mode == "patches":
++                                    elif (isinstance(node, BoundConv) or isinstance(node, BoundConv1d) or isinstance(node, BoundBatchNormalization)) and node.mode == "patches":
+                                         # Here we create an Identity Patches object 
+                                         newC = Patches(None, 1, 0, [batch_size, node.default_shape[-2] * node.default_shape[-1], node.default_shape[-3], node.default_shape[-3], 1, 1], 1)
+                                     elif isinstance(node, BoundAdd) and node.mode == "patches":
+diff --git a/auto_LiRPA/bound_ops.py b/auto_LiRPA/bound_ops.py
+index 66b2ea4..64a8e06 100644
+--- a/auto_LiRPA/bound_ops.py
++++ b/auto_LiRPA/bound_ops.py
+@@ -1,16 +1,16 @@
+ import copy
++import math
+ import os
+ from itertools import chain
++
+ import numpy as np
+ import torch
+ import torch.nn as nn
+ import torch.nn.functional as F
+-from torch.nn import MaxPool2d, \
+-    AdaptiveAvgPool2d, AvgPool2d, Tanh
+-import math
+-
+ from auto_LiRPA.perturbations import Perturbation, PerturbationLpNorm, PerturbationSynonym, PerturbationL0Norm
+-from auto_LiRPA.utils import eyeC, LinearBound, user_data_dir, lockutils, isnan, Patches, logger
++from auto_LiRPA.utils import eyeC, LinearBound, user_data_dir, lockutils, isnan, Patches
++from torch.nn import MaxPool2d, \
++    AdaptiveAvgPool2d, AvgPool2d, Tanh, MaxPool1d, AvgPool1d
+ 
+ epsilon = 1e-12
+ 
+@@ -127,14 +127,14 @@ class Bound(nn.Module):
+     def broadcast_backward(self, A, x):
+         shape = x.default_shape
+         batch_dim = max(self.batch_dim, 0)
+-                
++
+         if isinstance(A, torch.Tensor):
+             if x.batch_dim == -1:
+                 # final shape of input
+                 shape = torch.Size([A.shape[batch_dim + 1]] + list(shape))
+                 dims = []
+                 cnt_sum = A.ndim - len(shape) - 1
+-                for i in range(1, A.ndim): # merge the output dimensions?
++                for i in range(1, A.ndim):  # merge the output dimensions?
+                     if i != self.batch_dim + 1 and cnt_sum > 0:
+                         dims.append(i)
+                         cnt_sum -= 1
+@@ -153,7 +153,7 @@ class Bound(nn.Module):
+             assert (A.shape[1:] == shape)
+         elif type(A) == Patches:
+             pass
+-            
++
+         return A
+ 
+     @staticmethod
+@@ -215,11 +215,11 @@ class Bound(nn.Module):
+             else:
+                 return bias_new
+         elif type(A) == Patches:
+-            if torch.norm(A.patches, p = 1) < epsilon:
++            if torch.norm(A.patches, p=1) < epsilon:
+                 return 0
+ 
+             # the shape of A.patches is [batch, L, out_c, in_c, K, K]
+-            
++
+             if self.batch_dim != -1:
+                 batch_size = bias.shape[0]
+                 bias = F.unfold(bias, kernel_size=A.patches.size(-1), stride=A.stride, padding=A.padding).transpose(-2, -1).unsqueeze(-2)
+@@ -705,7 +705,7 @@ class BoundLinear(Bound):
+                 # mid has dimension [batch, input], w has dimension [output, input].
+                 center = mid.matmul(w.t())
+             deviation = w.norm(dual_norm, dim=-1) * eps
+-        else: # here we calculate the L0 norm IBP bound of Linear layers, using the bound proposed in [Certified Defenses for Adversarial Patches, ICLR 2020]
++        else:  # here we calculate the L0 norm IBP bound of Linear layers, using the bound proposed in [Certified Defenses for Adversarial Patches, ICLR 2020]
+             norm, eps, ratio = Interval.get_perturbation(v[0])
+             mid = v[0][0]
+             weight_abs = w.abs()
+@@ -797,7 +797,7 @@ class BoundLinear(Bound):
+                 w_pos, w_neg = w.clamp(min=0), w.clamp(max=0)
+                 lb = (x.lb.unsqueeze(1).matmul(w_pos) + x.ub.unsqueeze(1).matmul(w_neg)).squeeze(1)
+                 ub = (x.ub.unsqueeze(1).matmul(w_pos) + x.lb.unsqueeze(1).matmul(w_neg)).squeeze(1)
+-            else:               
++            else:
+                 w = w.t()
+                 w_pos, w_neg = w.clamp(min=0), w.clamp(max=0)
+                 lb = x.lb.matmul(w_pos) + x.ub.matmul(w_neg)
+@@ -875,8 +875,10 @@ class BoundBatchNormalization(Bound):
+ 
+         if self.training and self.track_running_stats:
+             # n = x.numel() / x.size(1)
+-            self.current_mean = x.mean([0, 2, 3])
+-            self.current_var = x.var([0, 2, 3], unbiased=False)
++            mean_dims = list(range(x.dim()))
++            del mean_dims[1]
++            self.current_mean = x.mean(mean_dims)
++            self.current_var = x.var(mean_dims, unbiased=False)
+             # with torch.no_grad():
+             #     m.data.copy_(m.data * round(1. - exponential_average_factor, 5) + self.current_mean * exponential_average_factor)
+             #     v.data.copy_(v.data * round(1. - exponential_average_factor, 5) + self.current_var * exponential_average_factor * n / (n - 1))
+@@ -892,6 +894,7 @@ class BoundBatchNormalization(Bound):
+             output = F.batch_norm(x, m, v, w, b, self.training or not self.track_running_stats,
+                                   exponential_average_factor, self.eps)
+ 
++        self.value = output
+         return output
+ 
+     def bound_backward(self, last_lA, last_uA, *x):
+@@ -907,9 +910,13 @@ class BoundBatchNormalization(Bound):
+             if last_A is None:
+                 return None, 0
+             if type(last_A) == torch.Tensor:
+-                next_A = last_A * tmp_weight.view(1, 1, -1, 1, 1)
+-                sum_bias = (last_A.sum((3, 4)) * tmp_bias).sum(2)
++                weight_shape = [1, 1, -1] + [1] * (last_A.dim() - 3)
++                next_A = last_A * tmp_weight.view(weight_shape)
++                sum_dims = list(range(3, last_A.dim()))
++                sum_last_A = last_A.sum(sum_dims) if len(sum_dims) > 0 else last_A
++                sum_bias = (sum_last_A * tmp_bias).sum(2)
+             elif type(last_A) == Patches:
++                raise NotImplementedError()
+                 if last_A.identity == 0:
+                     patches = last_A.patches
+                     patches = patches * tmp_weight.view(-1, 1, 1)
+@@ -919,9 +926,9 @@ class BoundBatchNormalization(Bound):
+                 else:
+                     # we should create a real identity Patch
+                     num_channel = tmp_weight.view(-1).size(0)
+-                    patches = (torch.eye(num_channel, device=tmp_weight.device) * tmp_weight.view(-1)).unsqueeze(0).unsqueeze(0).unsqueeze(4).unsqueeze(5) # now [1 * 1 * in_C * in_C * 1 * 1]
++                    patches = (torch.eye(num_channel, device=tmp_weight.device) * tmp_weight.view(-1)).unsqueeze(0).unsqueeze(0).unsqueeze(4).unsqueeze(5)  # now [1 * 1 * in_C * in_C * 1 * 1]
+                     next_A = Patches(patches, 1, 0, [1, 1, num_channel, 1, 1])
+-                    sum_bias = tmp_bias.unsqueeze(1).unsqueeze(2).unsqueeze(3) # squeezing batch dim, now [C * 1 * 1 * 1]
++                    sum_bias = tmp_bias.unsqueeze(1).unsqueeze(2).unsqueeze(3)  # squeezing batch dim, now [C * 1 * 1 * 1]
+             else:
+                 raise NotImplementedError()
+             return next_A, sum_bias
+@@ -944,8 +951,10 @@ class BoundBatchNormalization(Bound):
+         tmp_weight_abs = tmp_weight.abs()
+         tmp_bias = bias - current_mean * tmp_weight
+ 
+-        center = tmp_weight.view(1, -1, 1, 1) * mid + tmp_bias.view(1, -1, 1, 1)
+-        deviation = tmp_weight_abs.view(1, -1, 1, 1) * diff
++        target_shape = [1, -1] + ([1] * (len(mid.size()) - 2))
++
++        center = tmp_weight.view(target_shape) * mid + tmp_bias.view(target_shape)
++        deviation = tmp_weight_abs.view(target_shape) * diff
+         lower = center - deviation
+         upper = center + deviation
+         return lower, upper
+@@ -999,11 +1008,11 @@ class BoundConv(Bound):
+                 return None, 0
+             if type(last_A) == torch.Tensor:
+                 shape = last_A.size()
+-            # when (W−F+2P)%S != 0, construct the output_padding
++                # when (W−F+2P)%S != 0, construct the output_padding
+                 output_padding0 = int(self.input_shape[1]) - (int(self.output_shape[1]) - 1) * self.stride[0] + 2 * \
+-                                self.padding[0] - int(weight.size()[2])
++                                  self.padding[0] - int(weight.size()[2])
+                 output_padding1 = int(self.input_shape[2]) - (int(self.output_shape[2]) - 1) * self.stride[1] + 2 * \
+-                                self.padding[1] - int(weight.size()[3])
++                                  self.padding[1] - int(weight.size()[3])
+                 next_A = F.conv_transpose2d(last_A.reshape(shape[0] * shape[1], *shape[2:]), weight, None,
+                                             stride=self.stride, padding=self.padding, dilation=self.dilation,
+                                             groups=self.groups, output_padding=(output_padding0, output_padding1))
+@@ -1032,7 +1041,7 @@ class BoundConv(Bound):
+ 
+                     if self.has_bias:
+                         patches = last_A.patches
+-                        patches_sum = patches.sum((-1, -2)) 
++                        patches_sum = patches.sum((-1, -2))
+ 
+                         sum_bias = (patches_sum * x[2].fv).sum(-1).transpose(-2, -1)
+                         sum_bias = sum_bias.view(batch_size, -1, int(math.sqrt(L)), int(math.sqrt(L))).transpose(0, 1)
+@@ -1050,7 +1059,7 @@ class BoundConv(Bound):
+ 
+                 padding = padding * self.stride[0] + self.padding[0]
+                 stride *= self.stride[0]
+-                
++
+                 return Patches(pieces, stride, padding, pieces.shape), sum_bias
+             else:
+                 raise NotImplementedError()
+@@ -1082,7 +1091,7 @@ class BoundConv(Bound):
+             # TODO: padding
+             deviation = torch.mul(weight, weight).sum((1, 2, 3)).sqrt() * eps
+             deviation = deviation.unsqueeze(0).unsqueeze(-1).unsqueeze(-1)
+-        else: # Here we calculate the L0 norm IBP bound using the bound proposed in [Certified Defenses for Adversarial Patches, ICLR 2020]
++        else:  # Here we calculate the L0 norm IBP bound using the bound proposed in [Certified Defenses for Adversarial Patches, ICLR 2020]
+             norm, eps, ratio = Interval.get_perturbation(v[0])
+             mid = h_U
+             k = int(eps)
+@@ -1096,7 +1105,7 @@ class BoundConv(Bound):
+ 
+             ss = center.shape
+             deviation = deviation.repeat(ss[2] * ss[3]).view(-1, ss[1]).t().view(ss[1], ss[2], ss[3])
+-        
++
+         center = F.conv2d(mid, weight, bias, self.stride, self.padding, self.dilation, self.groups)
+ 
+         upper = center + deviation
+@@ -1119,25 +1128,174 @@ class BoundConv(Bound):
+         shape = mid_w.shape
+         shape_wconv = [shape[0] * shape[1]] + list(shape[2:])
+         deviation_w = F.conv2d(
+-            diff_w.reshape(shape_wconv), weight_abs, None, 
++            diff_w.reshape(shape_wconv), weight_abs, None,
+             self.stride, self.padding, self.dilation, self.groups)
+         deviation_b = F.conv2d(
+-            diff_b, weight_abs, None, 
++            diff_b, weight_abs, None,
+             self.stride, self.padding, self.dilation, self.groups)
+         center_w = F.conv2d(
+-            mid_w.reshape(shape_wconv), weight, None, 
++            mid_w.reshape(shape_wconv), weight, None,
+             self.stride, self.padding, self.dilation, self.groups)
+-        center_b =  F.conv2d(
+-            mid_b, weight, bias, 
++        center_b = F.conv2d(
++            mid_b, weight, bias,
+             self.stride, self.padding, self.dilation, self.groups)
+         deviation_w = deviation_w.reshape(shape[0], -1, *deviation_w.shape[1:])
+         center_w = center_w.reshape(shape[0], -1, *center_w.shape[1:])
+ 
+         return LinearBound(
+-            lw = center_w - deviation_w,
+-            lb = center_b - deviation_b,
+-            uw = center_w + deviation_w,
+-            ub = center_b + deviation_b)
++            lw=center_w - deviation_w,
++            lb=center_b - deviation_b,
++            uw=center_w + deviation_w,
++            ub=center_b + deviation_b)
++
++    def infer_batch_dim(self, batch_size, *x):
++        assert x[0] == 0
++        return x[0]
++
++
++class BoundConv1d(Bound):
++    def __init__(self, input_name, name, ori_name, attr, inputs, output_index, options, device):
++        assert (attr['pads'][0] == attr['pads'][1])
++
++        super().__init__(input_name, name, ori_name, attr, inputs, output_index, options, device)
++
++        self.stride = attr['strides']
++        self.padding = [attr['pads'][0]]
++        self.dilation = attr['dilations']
++        self.groups = attr['group']
++        if len(inputs) == 3:
++            self.has_bias = True
++        else:
++            self.has_bias = False
++        self.input_name = input_name
++        self.output_name = []
++        self.name = name
++        self.ori_name = ori_name
++        self.bounded = False
++        self.IBP_rets = None
++        self.to(device)
++        self.mode = options.get("conv_mode", "matrix")
++
++    def forward(self, *x):
++        # x[0]: input, x[1]: weight, x[2]: bias if self.has_bias
++        bias = x[2] if self.has_bias else None
++        output = F.conv1d(x[0], x[1], bias, self.stride, self.padding, self.dilation, self.groups)
++        self.output_shape = output.size()[1:]
++        self.input_shape = x[0].size()[1:]
++        self.value = output
++        return output
++
++    def bound_backward(self, last_lA, last_uA, *x):
++        if self.is_input_perturbed(1):
++            raise NotImplementedError("Weight perturbation for convolution layers has not been implmented.")
++
++        lA_y = uA_y = lA_bias = uA_bias = None
++        weight = x[1].fv
++
++        def _bound_oneside(last_A):
++            if last_A is None:
++                return None, 0
++            if type(last_A) == torch.Tensor:
++                shape = last_A.size()
++                output_padding0 = 0
++                next_A = F.conv_transpose1d(last_A.reshape(shape[0] * shape[1], *shape[2:]), weight, None,
++                                            stride=self.stride, padding=self.padding, dilation=self.dilation,
++                                            groups=self.groups, output_padding=output_padding0)
++                next_A = next_A.view(shape[0], shape[1], *next_A.shape[1:])
++                if self.has_bias:
++                    sum_bias = (last_A.sum(3) * x[2].fv).sum(2)
++                else:
++                    sum_bias = 0
++                return next_A, sum_bias
++            else:
++                raise NotImplementedError()
++
++        lA_x, lbias = _bound_oneside(last_lA)
++        uA_x, ubias = _bound_oneside(last_uA)
++        return [(lA_x, uA_x), (lA_y, uA_y), (lA_bias, uA_bias)], lbias, ubias
++
++    def interval_propagate(self, *v, C=None):
++        if self.is_input_perturbed(1):
++            raise NotImplementedError("Weight perturbation for convolution layers has not been implmented.")
++
++        norm = Interval.get_perturbation(v[0])
++        norm = norm[0]
++
++        h_L, h_U = v[0]
++        weight = v[1][0]
++        bias = v[2][0] if self.has_bias else None
++
++        if norm == np.inf:
++            mid = (h_U + h_L) / 2.0
++            diff = (h_U - h_L) / 2.0
++            weight_abs = weight.abs()
++            deviation = F.conv1d(diff, weight_abs, None, self.stride, self.padding, self.dilation, self.groups)
++        else:
++            raise NotImplementedError()
++        # elif norm > 0:
++        #     norm, eps = Interval.get_perturbation(v[0])
++        #     # L2 norm, h_U and h_L are the same.
++        #     mid = h_U
++        #     # TODO: padding
++        #     deviation = torch.mul(weight, weight).sum((1, 2, 3)).sqrt() * eps
++        #     deviation = deviation.unsqueeze(0).unsqueeze(-1).unsqueeze(-1)
++        # else: # Here we calculate the L0 norm IBP bound using the bound proposed in [Certified Defenses for Adversarial Patches, ICLR 2020]
++        #     norm, eps, ratio = Interval.get_perturbation(v[0])
++        #     mid = h_U
++        #     k = int(eps)
++        #     weight_sum = torch.sum(weight.abs(), 1)
++        #     deviation = torch.sum(torch.topk(weight_sum.view(weight_sum.shape[0], -1), k)[0], dim=1) * ratio
++        #
++        #     if self.has_bias:
++        #         center = F.conv2d(mid, weight, v[2][0], self.stride, self.padding, self.dilation, self.groups)
++        #     else:
++        #         center = F.conv2d(mid, weight, None, self.stride, self.padding, self.dilation, self.groups)
++        #
++        #     ss = center.shape
++        #     deviation = deviation.repeat(ss[2] * ss[3]).view(-1, ss[1]).t().view(ss[1], ss[2], ss[3])
++
++        center = F.conv1d(mid, weight, bias, self.stride, self.padding, self.dilation, self.groups)
++
++        upper = center + deviation
++        lower = center - deviation
++        return lower, upper
++
++    def bound_forward(self, dim_in, *x):
++        raise NotImplementedError()
++        if self.is_input_perturbed(1):
++            raise NotImplementedError("Weight perturbation for convolution layers has not been implmented.")
++
++        weight = x[1].lb
++        bias = x[2].lb if self.has_bias else None
++        x = x[0]
++
++        mid_w = (x.lw + x.uw) / 2
++        mid_b = (x.lb + x.ub) / 2
++        diff_w = (x.uw - x.lw) / 2
++        diff_b = (x.ub - x.lb) / 2
++        weight_abs = weight.abs()
++        shape = mid_w.shape
++        shape_wconv = [shape[0] * shape[1]] + list(shape[2:])
++        deviation_w = F.conv2d(
++            diff_w.reshape(shape_wconv), weight_abs, None,
++            self.stride, self.padding, self.dilation, self.groups)
++        deviation_b = F.conv2d(
++            diff_b, weight_abs, None,
++            self.stride, self.padding, self.dilation, self.groups)
++        center_w = F.conv2d(
++            mid_w.reshape(shape_wconv), weight, None,
++            self.stride, self.padding, self.dilation, self.groups)
++        center_b = F.conv2d(
++            mid_b, weight, bias,
++            self.stride, self.padding, self.dilation, self.groups)
++        deviation_w = deviation_w.reshape(shape[0], -1, *deviation_w.shape[1:])
++        center_w = center_w.reshape(shape[0], -1, *center_w.shape[1:])
++
++        return LinearBound(
++            lw=center_w - deviation_w,
++            lb=center_b - deviation_b,
++            uw=center_w + deviation_w,
++            ub=center_b + deviation_b)
+ 
+     def infer_batch_dim(self, batch_size, *x):
+         assert x[0] == 0
+@@ -1204,6 +1362,129 @@ class BoundAveragePool(AvgPool2d):
+         return 0
+ 
+ 
++class BoundAveragePool1d(AvgPool1d):
++    def __init__(self, input_name, name, ori_name, attr, inputs, output_index, options, device):
++        # assumptions: ceil_mode=False, count_include_pad=True
++        assert (attr['pads'][0] == attr['pads'][1])
++        kernel_size = attr['kernel_shape']
++        stride = attr['strides']
++        padding = [attr['pads'][0]]
++        ceil_mode = False
++        count_include_pad = True
++        super().__init__(kernel_size=kernel_size, stride=stride, padding=padding,
++                         ceil_mode=ceil_mode, count_include_pad=count_include_pad)
++        self.input_name = input_name
++        self.output_name = []
++        self.name = name
++        self.ori_name = ori_name
++        self.fv = None
++        self.bounded = False
++        self.IBP_rets = None
++        self.from_input = False
++
++    def forward(self, x):
++        self.input_shape = x.size()[1:]
++        output = super().forward(x)
++        return output
++
++    def bound_backward(self, last_lA, last_uA, x):
++        raise NotImplementedError()
++        # def _bound_oneside(last_A):
++        #     if last_A is None:
++        #         return None, 0
++        #     shape = last_A.size()
++        #     # propagate A to the next layer, with batch concatenated together
++        #     next_A = F.interpolate(last_A.view(shape[0] * shape[1], *shape[2:]), scale_factor=self.kernel_size) / (
++        #         np.prod(self.kernel_size))
++        #     next_A = next_A.view(shape[0], shape[1], *next_A.shape[1:])
++        #     return next_A, 0
++        #
++        # lA, lbias = _bound_oneside(last_lA)
++        # uA, ubias = _bound_oneside(last_uA)
++        # return [(lA, uA)], lbias, ubias
++
++    def interval_propagate(self, *v):
++        h_L, h_U = v[0]
++        h_L = super().forward(h_L)
++        h_U = super().forward(h_U)
++        return h_L, h_U
++
++    def infer_batch_dim(self, batch_size, *x):
++        assert x[0] == 0
++        return 0
++
++
++class BoundMaxPool(MaxPool1d):
++    def __init__(self, input_name, name, ori_name, attr, inputs, output_index, options, device):
++        # assumptions: ceil_mode=False, count_include_pad=True
++        assert (attr['pads'][0] == attr['pads'][1])
++        kernel_size = attr['kernel_shape']
++        stride = attr['strides']
++        padding = [attr['pads'][0]]
++        ceil_mode = False
++        count_include_pad = True
++        super().__init__(kernel_size=kernel_size, stride=stride, padding=padding,
++                         ceil_mode=ceil_mode)
++        self.input_name = input_name
++        self.output_name = []
++        self.name = name
++        self.ori_name = ori_name
++        self.fv = None
++        self.bounded = False
++        self.IBP_rets = None
++        self.from_input = False
++        self.nonlinear = True
++
++    def forward(self, x):
++        self.input_shape = x.size()[1:]
++        output = super().forward(x)
++        self.value = output
++        return output
++
++    def bound_backward(self, last_lA, last_uA, x):
++
++        def _one_bound(last_A, lb, ub, is_upper: bool):
++            if last_A is None:
++                return None, 0
++            shape = list(last_A.size())
++            shape[-1] = lb.size()[-1]
++            last_A = last_A.squeeze(0)
++
++            # last_A shape (logits x batch size x features x 1) = (40, 2, 1024, 1)
++            A = torch.zeros(shape, device=last_A.device)  # shape (num out logits x batch size x features x points) = (40, 2, 1024, 64)
++            bias = torch.zeros(shape[:2], device=last_A.device)  # shape (num out logits x batch size) = (40, 2)
++            max_lower_index = torch.argmax(lb, dim=-1)  # shape (batch size x num features) = (2, 1024)
++            max_upper_value = torch.max(ub, dim=-1)[0]
++
++            for i in range(shape[0]):  # num out logits (=40)
++                for j in range(shape[1]):  # batch size (=2)
++                    for k in range(shape[2]):  # num features (=1024)
++                        a = last_A[i, j, k]
++                        if (a >= 0 and (not is_upper)) or (a < 0 and is_upper):
++                            # using linear lower bound as positive lower bound or as negative upper bound
++                            index = max_lower_index[j, k]  # argmax across points (range [0, 63])
++                            A[i, j, k, index] = a
++                        else:
++                            # using constant upper bound as positive upper bound or as negative lower bound
++                            bias[i, j] = bias[i, j] + a * max_upper_value[j, k]
++
++            return A, bias
++
++        lA, lbias = _one_bound(last_lA, x.lower, x.upper, is_upper=False)
++        uA, ubias = _one_bound(last_uA, x.lower, x.upper, is_upper=True)
++        return [(lA, uA)], lbias, ubias
++
++    def interval_propagate(self, *v):
++        h_L, h_U = v[0]
++        h_L = super().forward(h_L)
++        h_U = super().forward(h_U)
++        return h_L, h_U
++
++    def infer_batch_dim(self, batch_size, *x):
++        assert x[0] == 0
++        return 0
++
++
+ class BoundGlobalAveragePool(AdaptiveAvgPool2d):
+     def __init__(self, input_name, name, ori_name, prev_layer, output_size, output_index):
+         raise NotImplementedError
+@@ -1585,7 +1866,9 @@ class BoundRelu(BoundActivation):
+             if self.slope is None or self.slope.shape != x.shape:
+                 self.slope = torch.ones_like(x, dtype=torch.float).to(x.device)
+                 self.slope.requires_grad_(True)
+-        return F.relu(x)
++        result = F.relu(x)
++        self.value = result
++        return result
+ 
+     # linear relaxation for nonlinear functions
+     def bound_relax(self, x):
+@@ -1921,7 +2204,7 @@ class BoundExp(BoundActivation):
+             # These should hold true in loss fusion
+             assert self.batch_dim == 0
+             assert A.shape[0] == 1
+-            
++
+             batch_size = A.shape[1]
+             ubias -= (A.reshape(batch_size, -1) * self.max_input.reshape(batch_size, -1)).sum(dim=-1).unsqueeze(0)
+             return [(None, uA)], 0, ubias
+@@ -1948,7 +2231,7 @@ class BoundLog(BoundActivation):
+     def forward(self, x):
+         # FIXME adhoc implementation for loss fusion
+         if self.loss_fusion:
+-            return torch.logsumexp(self.inputs[0].inputs[0].inputs[0].fv, dim=-1) 
++            return torch.logsumexp(self.inputs[0].inputs[0].inputs[0].fv, dim=-1)
+         return torch.log(x.clamp(min=epsilon))
+ 
+     def bound_relax(self, x):
+@@ -1963,8 +2246,8 @@ class BoundLog(BoundActivation):
+     def interval_propagate(self, *v):
+         # FIXME adhoc implementation now
+         if self.loss_fusion:
+-            lower = torch.logsumexp(self.inputs[0].inputs[0].inputs[0].lower, dim=-1) 
+-            upper = torch.logsumexp(self.inputs[0].inputs[0].inputs[0].upper, dim=-1) 
++            lower = torch.logsumexp(self.inputs[0].inputs[0].inputs[0].lower, dim=-1)
++            upper = torch.logsumexp(self.inputs[0].inputs[0].inputs[0].upper, dim=-1)
+             return lower, upper
+         return super().interval_propagate(*v)
+ 
+@@ -2261,7 +2544,7 @@ class BoundGatherElements(Bound):
+ 
+     def bound_backward(self, last_lA, last_uA, x, index):
+         assert self.from_input
+-        
++
+         dim = self._get_dim()
+ 
+         def _bound_oneside(last_A):
+@@ -2293,7 +2576,7 @@ class BoundGatherElements(Bound):
+     def infer_batch_dim(self, batch_size, *x):
+         assert self.axis != x[0]
+         return x[0]
+-    
++
+     def _get_dim(self):
+         dim = self.axis
+         if dim < 0:
+@@ -2647,7 +2930,7 @@ class BoundMatMul(BoundLinear):
+         w_l = v[1][0].transpose(-1, -2)
+         w_u = v[1][1].transpose(-1, -2)
+         lower, upper = super().interval_propagate(v[0], (w_l, w_u))
+-        return lower, upper   
++        return lower, upper
+ 
+     def bound_backward(self, last_lA, last_uA, *x):
+         assert len(x) == 2
+@@ -2768,7 +3051,7 @@ class BoundSoftmax(Bound):
+         exp_L, exp_U = torch.exp(h_L - shift), torch.exp(h_U - shift)
+         lower = exp_L / (torch.sum(exp_U, dim=self.axis, keepdim=True) - exp_U + exp_L + epsilon)
+         upper = exp_U / (torch.sum(exp_L, dim=self.axis, keepdim=True) - exp_L + exp_U + epsilon)
+-        return lower, upper  
++        return lower, upper
+ 
+     def infer_batch_dim(self, batch_size, *x):
+         assert self.axis != x[0]
+@@ -2940,6 +3223,7 @@ class BoundDropout(Bound):
+             if last_A is None:
+                 return None
+             return torch.where(self.mask.unsqueeze(0), torch.tensor(0).to(last_A), last_A * self.scale)
++
+         lA = _bound_oneside(last_lA)
+         uA = _bound_oneside(last_uA)
+         return [(lA, uA)], 0, 0
+@@ -2955,7 +3239,7 @@ class BoundDropout(Bound):
+     def interval_propagate(self, *v):
+         h_L, h_U = v[0]
+         if not self.training:
+-            return h_L, h_U        
++            return h_L, h_U
+         else:
+             lower = torch.where(self.mask, torch.tensor(0).to(h_L), h_L * self.scale)
+             upper = torch.where(self.mask, torch.tensor(0).to(h_U), h_U * self.scale)

@@ -1,0 +1,14 @@
+dataset               modelnet40
+num_points            64
+spatial_transform     RotationZ(-60,60)
+chunks                60
+inside_splits         15625
+num_tests             103
+poly_eps              0.0000001
+ub_estimate           Triangle
+num_threads           16
+max_coeff             INFINITY
+lp_samples            1000
+num_poly_check        1000
+set                   test
+debug                 true
