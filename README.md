@@ -15,7 +15,7 @@ effectiveness of 3DCertify by performing an extensive evaluation on a wide range
 twisting) for both classification and part segmentation tasks. For example, we can certify robustness against rotations
 by ±60° for 95.7% of point clouds, and our max pool relaxation increases certification by up to 15.6%.
 
-Paper Link: [arXiv](TODO)
+Paper Link: [arXiv](https://arxiv.org/abs/2103.16652)
 
 ## Setup Instructions
 
@@ -156,7 +156,7 @@ python verify_lirpa.py \
                Balunovi{\'c}, Mislav and
                Singh, Gagandeep and
                Vechev, Martin},
-    journal = {arXiv preprint arXiv:TODO},
+    journal = {arXiv preprint arXiv:2103.16652},
     year    = {2021}
 }
 ```
@@ -172,3 +172,4 @@ python verify_lirpa.py \
 ## License
 
 Licensed under the [Apache-2.0 License](https://www.apache.org/licenses/LICENSE-2.0)
+
