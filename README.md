@@ -163,13 +163,12 @@ python verify_lirpa.py \
 
 ## Contributors
 
-* Tobias Lorenz (tobias.lorenz@inf.ethz.ch)
+* [Tobias Lorenz](https://www.t-lorenz.com) (tobias.lorenz@cispa.de)
 * Anian Ruoss (anian.ruoss@inf.ethz.ch)
 * [Mislav Balunović](https://www.sri.inf.ethz.ch/people/mislav) (mislav.balunovic@inf.ethz.ch)
-* [Gagandeep Singh](https://www.sri.inf.ethz.ch/people/gagandeep) (gsingh@inf.ethz.ch)
+* [Gagandeep Singh](https://ggndpsngh.github.io/) (ggnds@illinois.edu)
 * [Martin Vechev](https://www.sri.inf.ethz.ch/people/martin) (martin.vechev@inf.ethz.ch)
 
 ## License
 
 Licensed under the [Apache-2.0 License](https://www.apache.org/licenses/LICENSE-2.0)
-
