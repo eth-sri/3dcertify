@@ -43,7 +43,7 @@ if not settings.step_size:
 os.makedirs(settings.out, exist_ok=settings.ignore_existing_output_dir)
 
 log_name = f"train_defended[{settings.defense}]_eps[{settings.eps}]_rotation[settings.rotation]_pooling[{settings.pooling}]"
-logger = logging.create_logger(os.path.dirname(settings.model), log_name)
+logger = logging.create_logger(settings.out, log_name)
 
 logger.info(settings)
 
