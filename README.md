@@ -149,15 +149,16 @@ python verify_lirpa.py \
 ## Citing This Work
 
 ```
-@article{lorenz2021pointclouds,
-    title   = {Robustness Certification for Point Cloud Models},
-    author  = {Lorenz, Tobias and
-               Ruoss, Anian and
-               Balunovi{\'c}, Mislav and
-               Singh, Gagandeep and
-               Vechev, Martin},
-    journal = {arXiv preprint arXiv:2103.16652},
-    year    = {2021}
+@inproceedings{lorenz2021robustness,
+    author       = {Tobias Lorenz and
+                    Anian Ruoss and
+                    Mislav Balunovi{\'c} and
+                    Gagandeep Singh and
+                    Martin Vechev},
+    title        = {Robustness Certification for Point Cloud Models},
+    year         = 2021,
+    month        = {October},
+    booktitle    = {Proceedings of the IEEE International Conference on Computer Vision (ICCV)}
 }
 ```
 
