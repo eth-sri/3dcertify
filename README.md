@@ -35,7 +35,11 @@ conda activate 3dcertify
 Setup dependencies and install ERAN:
 
 ```bash
-cd ERAN && ./install.sh && cd ..
+cd ERAN
+# select an ELINA version compatible with the selected version of ERAN
+sed -i'' -e '/^cd ELINA$/a git checkout 2c9a4ea' install.sh
+./install.sh
+cd ..
 ```
 
 For DeepG3D relaxations, install Deepg3D (see also `deepg3d/README.md`):
