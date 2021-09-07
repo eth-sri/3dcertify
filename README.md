@@ -2,20 +2,17 @@
 
 ![Overview](overview.png)
 
-## Abstract
+3DCertify is the first verifier to certify the robustness of 3D point cloud models against semantic, real-world transformations and point perturbations.
+It leverages first-order Taylor approximations to efficiently compute linear relaxations of any differentiable transformation function.
+These relaxations can be used to certify a network's robustness to common transformations such as rotation, shifting, or twisting, using a state-of-the-art general network verifier as a backend (e.g., [ERAN](https://github.com/eth-sri/eran) or [auto_LiRPA](https://github.com/KaidiXu/auto_LiRPA)).
+Furthermore, 3DCertify improves these certifiers with a tighter relaxation for max pool layers, which are particularly challenging and a crucial component of point cloud architectures.
 
-The use of deep 3D point cloud models in safety-critical applications, such as autonomous driving, dictates the need to
-certify the robustness of these models to semantic transformations. This is technically challenging as it requires a
-scalable verifier tailored to point cloud models that handles a wide range of semantic 3D transformations. In this work,
-we address this challenge and introduce 3DCertify, the first verifier able to certify robustness of point cloud models.
-3DCertify is based on two key insights: (i) a generic relaxation based on first-order Taylor approximations, applicable
-to any differentiable transformation, and (ii) a precise relaxation for global feature pooling, which is more complex
-than pointwise activations (e.g., ReLU or sigmoid) but commonly employed in point cloud models. We demonstrate the
-effectiveness of 3DCertify by performing an extensive evaluation on a wide range of 3D transformations (e.g., rotation,
-twisting) for both classification and part segmentation tasks. For example, we can certify robustness against rotations
-by ±60° for 95.7% of point clouds, and our max pool relaxation increases certification by up to 15.6%.
+This repository contains all implementations, models, and instructions required to reproduce the experiments from our ICCV'21 paper.
+Please refer to the paper for the theoretical introduction and analysis, as well as detailed results.
 
-Paper Link: [arXiv](https://arxiv.org/abs/2103.16652)
+Paper Links: &emsp; [Paper](https://arxiv.org/pdf/2103.16652.pdf) &emsp; [ArXiv](https://arxiv.org/abs/2103.16652)
+
+This work is part of the [SafeAI](http://safeai.ethz.ch) project at the [SRI lab](https://www.sri.inf.ethz.ch) of [ETH Zurich](https://ethz.ch/).
 
 ## Setup Instructions
 
@@ -150,7 +147,7 @@ python verify_lirpa.py \
     --experiment example5
 ```
 
-## Citing This Work
+## Citing this Work
 
 ```
 @inproceedings{lorenz2021robustness,
