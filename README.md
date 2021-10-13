@@ -10,7 +10,7 @@ Furthermore, 3DCertify improves these certifiers with a tighter relaxation for m
 This repository contains all implementations, models, and instructions required to reproduce the experiments from our ICCV'21 paper.
 Please refer to the paper for the theoretical introduction and analysis, as well as detailed results.
 
-Paper Links: &emsp; [Paper](https://arxiv.org/pdf/2103.16652.pdf) &emsp; [ArXiv](https://arxiv.org/abs/2103.16652)
+Paper Links: &emsp; [Paper](https://openaccess.thecvf.com/content/ICCV2021/html/Lorenz_Robustness_Certification_for_Point_Cloud_Models_ICCV_2021_paper.html) &emsp; [ArXiv](https://arxiv.org/abs/2103.16652)
 
 This work is part of the [SafeAI](http://safeai.ethz.ch) project at the [SRI lab](https://www.sri.inf.ethz.ch) of [ETH Zurich](https://ethz.ch/).
 
@@ -159,7 +159,8 @@ python verify_lirpa.py \
     title        = {Robustness Certification for Point Cloud Models},
     year         = 2021,
     month        = {October},
-    booktitle    = {Proceedings of the IEEE International Conference on Computer Vision (ICCV)}
+    booktitle    = {Proceedings of the IEEE/CVF International Conference on Computer Vision (ICCV)}
+    pages        = {7608-7618}
 }
 ```
 
